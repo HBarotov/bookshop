@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15.4
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    env_file:
+      - ./.env.dev.db
+
+  web:
+    build: ./app
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./app/:/usr/src/app/
+    ports:
+      - 8000:8000
+    env_file:
+      - ./.env
+    depends_on:
+      - db
+      - rabbitmq
+      - redis
+
+  rabbitmq:
+    image: rabbitmq:3.13.1-management
+    ports:
+      - 5672:5672
+      - 15672:15672
+    env_file:
+      - ./.env
+
+  redis:
+    image: redis:7.2.4
+    ports:
+      - 6379:6379
+  
+  celery_worker:
+    build: ./app
+    command: /usr/src/app/wait-for.sh rabbitmq celery -A django_project worker -l info
+    volumes:
+      - ./app/:/usr/src/app/
+    env_file:
+      - ./.env
+    depends_on:
+      - rabbitmq
+      - redis
+
+  celery_beat:
+    build: ./app
+    command: /usr/src/app/wait-for.sh rabbitmq celery -A django_project beat -l info
+    volumes:
+      - ./app/:/usr/src/app/
+    env_file:
+      - ./.env
+    depends_on:
+      - rabbitmq
+      - redis
+  
+  flower:
+    image: mher/flower
+    command: celery flower --basic-auth=user:password --broker=amqp://user:password@rabbitmq:5672//
+    ports:
+      - 5555:5555
+    env_file:
+      - ./.env
+    depends_on:
+      - rabbitmq
+      - redis
+
+  stripe-cli:
+    image: stripe/stripe-cli
+    volumes:
+      - ~/.config/stripe:/root/.config/stripe
+    command: listen --api-key ${STRIPE_SECRET_KEY} --forward-to http://172.17.0.1:8000/payments/webhook/
+    depends_on:
+      - web
+    environment:
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+
+volumes:
+  postgres_data:
